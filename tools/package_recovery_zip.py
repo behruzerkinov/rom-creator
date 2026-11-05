@@ -4,7 +4,8 @@ package_recovery_zip.py - Assemble standard TWRP / OrangeFox recovery flashable 
 for Redmi Note 10 Pro (sweet / sweetin).
 Features:
 - Robust multi-path block device detection (resolves symlinks in toybox/busybox)
-- Unsparse raw dynamic partition streaming (writes raw sectors directly to block storage)
+- Chunked 512MB raw dynamic partition streaming (prevents Scudo allocator OOM/SIGABRT in toybox unzip)
+- Precise block-aligned dd seeking (bs=4M, seek=128 per chunk) directly to UFS storage
 - Device mapper unmount and unmapping (prevents EBUSY partition locking)
 - Permissive AVB and SuperRyzeNS kernel injection
 """
@@ -22,6 +23,8 @@ SIMG2IMG_BIN = os.path.join(PROJECT_ROOT, "tools", "bin", "simg2img.exe")
 UPDATE_BINARY_SCRIPT = b"""#!/bin/sh
 # Universal Recovery Installer for Redmi Note 10 Pro (sweet / sweetin)
 # Compatible with TWRP, OrangeFox, PBRP
+
+set -o pipefail 2>/dev/null || true
 
 OUTFD=/proc/self/fd/$2
 ZIPFILE="$3"
@@ -113,16 +116,35 @@ if [ -n "$BOOT" ]; then
 fi
 
 set_progress 0.4
-ui_print "[*] 4/5 Flashing dynamic super partition (raw sectors)..."
-ui_print "    Writing ~7 GB dynamic sectors. This will take 2-4 minutes..."
+ui_print "[*] 4/5 Flashing dynamic super partition (chunked sectors)..."
+ui_print "    Writing 17 chunks of 512 MB. Please wait..."
 blockdev --setrw "$SUPER" 2>/dev/null || true
 
-unzip -p "$ZIPFILE" super.img > "$SUPER"
-SUPER_STATUS=$?
+CHUNK_IDX=0
+BLOCKS_PER_CHUNK=128
 
-if [ $SUPER_STATUS -ne 0 ]; then
-  ui_print "[-] ERROR: Failed writing dynamic super partition (status: $SUPER_STATUS)!"
-  exit 1
+for chunk in $(unzip -l "$ZIPFILE" | awk '{print $4}' | grep '^super\\.raw\\.' | sort); do
+  CHUNK_NUM=$((CHUNK_IDX + 1))
+  SEEK_OFFSET=$((CHUNK_IDX * BLOCKS_PER_CHUNK))
+  ui_print "    [$CHUNK_NUM/17] Writing $chunk..."
+  
+  unzip -p "$ZIPFILE" "$chunk" | dd of="$SUPER" bs=4M seek=$SEEK_OFFSET conv=notrunc 2>/dev/null
+  if [ $? -ne 0 ]; then
+    ui_print "[-] ERROR: Failed writing $chunk!"
+    exit 1
+  fi
+  
+  # Increment progress indicator
+  PROGRESS=$(awk "BEGIN {printf \"%.2f\", 0.4 + ($CHUNK_NUM / 17.0) * 0.55}" 2>/dev/null || echo "0.7")
+  set_progress "$PROGRESS"
+  
+  CHUNK_IDX=$((CHUNK_IDX + 1))
+done
+
+if [ $CHUNK_IDX -eq 0 ]; then
+  # Fallback for monolithic super image if chunks are not present
+  ui_print "    Writing monolithic super.img..."
+  unzip -p "$ZIPFILE" super.img | dd of="$SUPER" bs=4M conv=notrunc || { ui_print "[-] Failed writing super.img"; exit 1; }
 fi
 
 set_progress 0.95
@@ -176,6 +198,11 @@ def create_recovery_zip():
     raw_super_tmp = os.path.join(OUTPUT_DIR, "super_raw_tmp.img")
     unsparse_super_if_needed(sparse_super, raw_super_tmp)
 
+    raw_total_size = os.path.getsize(raw_super_tmp)
+    chunk_size = 512 * 1024 * 1024  # 512 MB per chunk
+    num_chunks = (raw_total_size + chunk_size - 1) // chunk_size
+    buffer_size = 8 * 1024 * 1024  # 8 MB buffer
+
     try:
         with zipfile.ZipFile(ZIP_OUTPUT_PATH, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as z:
             # 1. Update binary & updater script
@@ -192,9 +219,28 @@ def create_recovery_zip():
                 print(f"[*] Packaging {f} ({os.path.getsize(fp) // (1024*1024)} MB)...")
                 z.write(fp, arcname=f)
 
-            # 3. Stream unsparsed raw super into zip as super.img
-            print(f"[*] Packaging unsparsed raw dynamic super.img ({os.path.getsize(raw_super_tmp) // (1024*1024)} MB)...")
-            z.write(raw_super_tmp, arcname="super.img")
+            # 3. Stream raw super chunks into zip (512 MB each, perfectly aligned to 4MB blocks)
+            print(f"[*] Packaging raw dynamic super in {num_chunks} chunks ({chunk_size // (1024*1024)} MB each)...")
+            with open(raw_super_tmp, 'rb') as src_file:
+                for idx in range(num_chunks):
+                    chunk_name = f"super.raw.{idx:02d}"
+                    bytes_remaining = min(chunk_size, raw_total_size - (idx * chunk_size))
+                    if bytes_remaining <= 0:
+                        break
+
+                    print(f"    -> Packaging {chunk_name} ({bytes_remaining // (1024*1024)} MB)...")
+                    chunk_info = zipfile.ZipInfo(chunk_name)
+                    chunk_info.external_attr = 0o644 << 16
+                    chunk_info.compress_type = zipfile.ZIP_DEFLATED
+                    chunk_info._compresslevel = 1
+                    with z.open(chunk_info, 'w') as dest_file:
+                        while bytes_remaining > 0:
+                            to_read = min(buffer_size, bytes_remaining)
+                            chunk_data = src_file.read(to_read)
+                            if not chunk_data:
+                                break
+                            dest_file.write(chunk_data)
+                            bytes_remaining -= len(chunk_data)
 
         zip_size_gb = os.path.getsize(ZIP_OUTPUT_PATH) / (1024 * 1024 * 1024)
         print(f"\n[+] Recovery zip created successfully: {ZIP_OUTPUT_PATH} ({zip_size_gb:.2f} GB)")
