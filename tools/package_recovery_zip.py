@@ -2,16 +2,24 @@
 """
 package_recovery_zip.py - Assemble standard TWRP / OrangeFox recovery flashable zip
 for Redmi Note 10 Pro (sweet / sweetin).
+Features:
+- Robust multi-path block device detection (resolves symlinks in toybox/busybox)
+- Unsparse raw dynamic partition streaming (writes raw sectors directly to block storage)
+- Device mapper unmount and unmapping (prevents EBUSY partition locking)
+- Permissive AVB and SuperRyzeNS kernel injection
 """
 
 import os
 import sys
+import subprocess
 import zipfile
 
-OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "workspace", "output"))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "workspace", "output")
 ZIP_OUTPUT_PATH = os.path.join(OUTPUT_DIR, "HyperOS_sweet_port_recovery.zip")
+SIMG2IMG_BIN = os.path.join(PROJECT_ROOT, "tools", "bin", "simg2img.exe")
 
-UPDATE_BINARY_SCRIPT = b"""#!/sbin/sh
+UPDATE_BINARY_SCRIPT = b"""#!/bin/sh
 # Universal Recovery Installer for Redmi Note 10 Pro (sweet / sweetin)
 # Compatible with TWRP, OrangeFox, PBRP
 
@@ -19,11 +27,11 @@ OUTFD=/proc/self/fd/$2
 ZIPFILE="$3"
 
 ui_print() {
-  echo -e "ui_print $1\\nui_print" > "$OUTFD"
+  echo -e "ui_print $1\\nui_print" > "$OUTFD" 2>/dev/null || echo "$1"
 }
 
 set_progress() {
-  echo "set_progress $1" > "$OUTFD"
+  echo "set_progress $1" > "$OUTFD" 2>/dev/null || true
 }
 
 ui_print "================================================="
@@ -31,57 +39,94 @@ ui_print "   HyperOS Port for Redmi Note 10 Pro (sweet)   "
 ui_print "   SuperRyzeNS Kernel + Kakashi Mods + RW Ext4  "
 ui_print "================================================="
 
-# Locate block devices
-get_block() {
-  for base in "/dev/block/bootdevice/by-name" "/dev/block/by-name" "/dev/block/platform/soc/7c4000.sdhci/by-name" "/dev/block/platform/soc/1d84000.ufshc/by-name"; do
-    if [ -b "$base/$1" ]; then
-      echo "$base/$1"
+# Locate block devices reliably across TWRP and OrangeFox
+find_block() {
+  part="$1"
+  for dir in \
+    "/dev/block/bootdevice/by-name" \
+    "/dev/block/by-name" \
+    "/dev/block/platform/soc/1d84000.ufshc/by-name" \
+    "/dev/block/platform/soc/*/by-name"; do
+    if [ -e "$dir/$part" ]; then
+      real_target=$(readlink -f "$dir/$part" 2>/dev/null || echo "$dir/$part")
+      echo "$real_target"
+      return 0
+    fi
+  done
+  for cand in $(find /dev/block -name "$part" 2>/dev/null); do
+    if [ -e "$cand" ]; then
+      real_target=$(readlink -f "$cand" 2>/dev/null || echo "$cand")
+      echo "$real_target"
       return 0
     fi
   done
   return 1
 }
 
-SUPER=$(get_block super)
-BOOT=$(get_block boot)
-DTBO=$(get_block dtbo)
-VBMETA=$(get_block vbmeta)
-VBMETA_SYS=$(get_block vbmeta_system)
+ui_print "[*] Detecting partition block devices..."
+BOOT=$(find_block boot)
+DTBO=$(find_block dtbo)
+VBMETA=$(find_block vbmeta)
+VBMETA_SYS=$(find_block vbmeta_system)
+SUPER=$(find_block super)
+
+ui_print "    boot   : $BOOT"
+ui_print "    dtbo   : $DTBO"
+ui_print "    vbmeta : $VBMETA"
+ui_print "    super  : $SUPER"
+
+if [ -z "$BOOT" ] || [ -z "$SUPER" ]; then
+  ui_print "[-] ERROR: Required block devices (boot/super) could not be located!"
+  exit 1
+fi
+
+# Unmount dynamic and logical partitions to release super block locks (EBUSY)
+ui_print "[*] Preparing dynamic partition map..."
+for m in /system /system_root /vendor /product /system_ext /odm /mi_ext /metadata /cache; do
+  umount -l "$m" 2>/dev/null || true
+done
+if [ -d /dev/block/mapper ]; then
+  for dm in system vendor product system_ext odm mi_ext; do
+    dmctl delete "$dm" 2>/dev/null || true
+  done
+fi
 
 set_progress 0.1
 ui_print "[*] 1/5 Flashing vbmeta images (disabling AVB)..."
 if [ -n "$VBMETA" ]; then
-  unzip -p "$ZIPFILE" vbmeta.img > "$VBMETA" 2>/dev/null
+  unzip -p "$ZIPFILE" vbmeta.img > "$VBMETA" || { ui_print "[-] Failed flashing vbmeta"; exit 1; }
 fi
 if [ -n "$VBMETA_SYS" ]; then
-  unzip -p "$ZIPFILE" vbmeta_system.img > "$VBMETA_SYS" 2>/dev/null
+  unzip -p "$ZIPFILE" vbmeta_system.img > "$VBMETA_SYS" || { ui_print "[-] Failed flashing vbmeta_system"; exit 1; }
 fi
 
 set_progress 0.2
 ui_print "[*] 2/5 Flashing display dtbo..."
 if [ -n "$DTBO" ]; then
-  unzip -p "$ZIPFILE" dtbo.img > "$DTBO" 2>/dev/null
+  unzip -p "$ZIPFILE" dtbo.img > "$DTBO" || { ui_print "[-] Failed flashing dtbo"; exit 1; }
 fi
 
 set_progress 0.3
 ui_print "[*] 3/5 Flashing SuperRyzeNS custom boot image..."
 if [ -n "$BOOT" ]; then
-  unzip -p "$ZIPFILE" boot.img > "$BOOT" 2>/dev/null
+  unzip -p "$ZIPFILE" boot.img > "$BOOT" || { ui_print "[-] Failed flashing boot"; exit 1; }
 fi
 
 set_progress 0.4
-ui_print "[*] 4/5 Flashing dynamic super partition (super.img)..."
-ui_print "    This will take 1-3 minutes. Please wait..."
-if [ -n "$SUPER" ]; then
-  if command -v simg2img >/dev/null 2>&1; then
-    unzip -p "$ZIPFILE" super.img | simg2img - "$SUPER" 2>/dev/null || unzip -p "$ZIPFILE" super.img > "$SUPER" 2>/dev/null
-  else
-    unzip -p "$ZIPFILE" super.img > "$SUPER" 2>/dev/null
-  fi
+ui_print "[*] 4/5 Flashing dynamic super partition (raw sectors)..."
+ui_print "    Writing ~7 GB dynamic sectors. This will take 2-4 minutes..."
+blockdev --setrw "$SUPER" 2>/dev/null || true
+
+unzip -p "$ZIPFILE" super.img > "$SUPER"
+SUPER_STATUS=$?
+
+if [ $SUPER_STATUS -ne 0 ]; then
+  ui_print "[-] ERROR: Failed writing dynamic super partition (status: $SUPER_STATUS)!"
+  exit 1
 fi
 
 set_progress 0.95
-ui_print "[*] 5/5 Syncing storage buffers..."
+ui_print "[*] 5/5 Syncing filesystem storage buffers..."
 sync
 
 set_progress 1.0
@@ -95,44 +140,69 @@ exit 0
 UPDATER_SCRIPT_CONTENT = b"# Dummy updater-script for custom recovery compatibility\n"
 
 
+def unsparse_super_if_needed(sparse_path, raw_path):
+    print(f"[*] Unsparsing {sparse_path} -> {raw_path}...")
+    if not os.path.isfile(SIMG2IMG_BIN):
+        raise FileNotFoundError(f"simg2img binary not found at: {SIMG2IMG_BIN}")
+
+    cmd = [SIMG2IMG_BIN, sparse_path, raw_path]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        raise RuntimeError(f"simg2img failed: {res.stderr}")
+    print(f"[+] Unsparsed super image: {os.path.getsize(raw_path) // (1024*1024)} MB")
+
+
 def create_recovery_zip():
     print(f"[*] Creating recovery flashable zip: {ZIP_OUTPUT_PATH}...")
     if os.path.exists(ZIP_OUTPUT_PATH):
         os.remove(ZIP_OUTPUT_PATH)
 
-    required_files = [
+    required_standard = [
         "boot.img",
         "dtbo.img",
         "vbmeta.img",
-        "vbmeta_system.img",
-        "super.img"
+        "vbmeta_system.img"
     ]
 
-    for f in required_files:
+    for f in required_standard:
         p = os.path.join(OUTPUT_DIR, f)
         if not os.path.isfile(p):
             raise FileNotFoundError(f"Required artifact missing: {p}")
 
-    with zipfile.ZipFile(ZIP_OUTPUT_PATH, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as z:
-        # 1. Update binary & script
-        bin_info = zipfile.ZipInfo("META-INF/com/google/android/update-binary")
-        bin_info.external_attr = 0o755 << 16  # Executable permissions
-        z.writestr(bin_info, UPDATE_BINARY_SCRIPT)
+    sparse_super = os.path.join(OUTPUT_DIR, "super.img")
+    if not os.path.isfile(sparse_super):
+        raise FileNotFoundError(f"Required artifact missing: {sparse_super}")
 
-        z.writestr("META-INF/com/google/android/updater-script", UPDATER_SCRIPT_CONTENT)
-        print("[+] Injected META-INF installer binaries.")
+    raw_super_tmp = os.path.join(OUTPUT_DIR, "super_raw_tmp.img")
+    unsparse_super_if_needed(sparse_super, raw_super_tmp)
 
-        # 2. Images
-        for f in required_files:
-            file_path = os.path.join(OUTPUT_DIR, f)
-            file_size_mb = os.path.getsize(file_path) // (1024 * 1024)
-            print(f"[*] Packaging {f} ({file_size_mb} MB)...")
-            z.write(file_path, arcname=f)
+    try:
+        with zipfile.ZipFile(ZIP_OUTPUT_PATH, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as z:
+            # 1. Update binary & updater script
+            bin_info = zipfile.ZipInfo("META-INF/com/google/android/update-binary")
+            bin_info.external_attr = 0o755 << 16
+            z.writestr(bin_info, UPDATE_BINARY_SCRIPT)
 
-    zip_size_gb = os.path.getsize(ZIP_OUTPUT_PATH) / (1024 * 1024 * 1024)
-    print(f"\n[+] Recovery zip generated successfully: {ZIP_OUTPUT_PATH} ({zip_size_gb:.2f} GB)")
+            z.writestr("META-INF/com/google/android/updater-script", UPDATER_SCRIPT_CONTENT)
+            print("[+] Injected updated recovery META-INF updater.")
+
+            # 2. Standard partition images
+            for f in required_standard:
+                fp = os.path.join(OUTPUT_DIR, f)
+                print(f"[*] Packaging {f} ({os.path.getsize(fp) // (1024*1024)} MB)...")
+                z.write(fp, arcname=f)
+
+            # 3. Stream unsparsed raw super into zip as super.img
+            print(f"[*] Packaging unsparsed raw dynamic super.img ({os.path.getsize(raw_super_tmp) // (1024*1024)} MB)...")
+            z.write(raw_super_tmp, arcname="super.img")
+
+        zip_size_gb = os.path.getsize(ZIP_OUTPUT_PATH) / (1024 * 1024 * 1024)
+        print(f"\n[+] Recovery zip created successfully: {ZIP_OUTPUT_PATH} ({zip_size_gb:.2f} GB)")
+    finally:
+        if os.path.exists(raw_super_tmp):
+            os.remove(raw_super_tmp)
+            print("[*] Cleaned up temporary raw super image.")
 
 
 if __name__ == '__main__':
     create_recovery_zip()
-
