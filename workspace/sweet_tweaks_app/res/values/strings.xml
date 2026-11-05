@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sweet Lab &amp; Tweaks</string>
+    <string name="app_summary">Display 120Hz, GPU overclock, ZRAM, and Kakashi mod settings</string>
+    <string name="category_display">Display &amp; Refresh Rate</string>
+    <string name="pref_refresh_rate">Peak Refresh Rate</string>
+    <string name="pref_refresh_rate_summary">Force 120Hz continuous refresh rate without dynamic throttling</string>
+    <string name="category_performance">Kernel &amp; SoC Tweaks</string>
+    <string name="pref_governor">CPU Scaling Governor</string>
+    <string name="pref_governor_summary">Select governor priority: reflex, schedhorizon, schedutil</string>
+    <string name="pref_fast_charge">Force Thermal Bypass &amp; Fast Charge</string>
+    <string name="pref_fast_charge_summary">Floor GPU to 355MHz and allow maximum charge current</string>
+    <string name="category_memory">Memory &amp; Swap Tuning</string>
+    <string name="pref_zram_size">ZRAM Compressed Swap Size</string>
+    <string name="pref_zram_summary">Allocate 3GB (6GB variant) or 5GB (8GB variant) with LZ4 algorithm</string>
+    <string name="category_mods">Kakashi Mods Center</string>
+    <string name="pref_open_launcher_settings">HyperOS Launcher Customizer</string>
+    <string name="pref_open_security_settings">Game Turbo &amp; FBO Manager</string>
+    <string name="pref_open_control_center">Control Center Tile Config</string>
+</resources>
+

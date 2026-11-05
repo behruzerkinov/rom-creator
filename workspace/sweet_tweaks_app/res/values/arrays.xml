@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="refresh_rate_entries">
+        <item>Forced 120Hz (Ultra Smooth)</item>
+        <item>Forced 90Hz (Balanced)</item>
+        <item>Standard 60Hz (Battery Saver)</item>
+    </string-array>
+    <string-array name="refresh_rate_values">
+        <item>120</item>
+        <item>90</item>
+        <item>60</item>
+    </string-array>
+
+    <string-array name="governor_entries">
+        <item>Reflex (High Performance Gaming)</item>
+        <item>Moonbeam (Low Latency Daily)</item>
+        <item>Schedhorizon (Balanced Qualcomm)</item>
+        <item>Schedutil (Stock Conservative)</item>
+    </string-array>
+    <string-array name="governor_values">
+        <item>reflex</item>
+        <item>moonbeam</item>
+        <item>schedhorizon</item>
+        <item>schedutil</item>
+    </string-array>
+
+    <string-array name="zram_entries">
+        <item>5.0 GB (Recommended for 8GB RAM variants)</item>
+        <item>4.0 GB (Aggressive Multitasking)</item>
+        <item>3.0 GB (Default for 6GB RAM variants)</item>
+    </string-array>
+    <string-array name="zram_values">
+        <item>5368709120</item>
+        <item>4294967296</item>
+        <item>3221225472</item>
+    </string-array>
+</resources>
+

@@ -1,0 +1,35 @@
+# Android Firmware & Partition Image Artifacts
+*.img
+*.img.*
+*.bin
+*.elf
+*.mbn
+*.zip
+*.7z
+*.tar
+*.gz
+*.br
+*.dat
+*.patch.dat
+*.transfer.list
+*.aria2
+
+# Large build and staging directories
+workspace/base/*
+!workspace/base/.gitkeep
+workspace/donor/*
+!workspace/donor/.gitkeep
+workspace/target/*
+!workspace/target/.gitkeep
+workspace/mods/*
+!workspace/mods/.gitkeep
+workspace/output/*
+!workspace/output/.gitkeep
+!workspace/output/*.bat
+!workspace/output/*.sh
+
+# Python cache & temporary files
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
