@@ -116,35 +116,26 @@ if [ -n "$BOOT" ]; then
 fi
 
 set_progress 0.4
-ui_print "[*] 4/5 Flashing dynamic super partition (chunked sectors)..."
-ui_print "    Writing 17 chunks of 512 MB. Please wait..."
+ui_print "[*] 4/5 Flashing dynamic super partition (raw sectors)..."
+ui_print "    Streaming dynamic partition blocks. Please wait..."
 blockdev --setrw "$SUPER" 2>/dev/null || true
 
-CHUNK_IDX=0
-BLOCKS_PER_CHUNK=128
+# Collect all raw chunks in exact numeric order
+CHUNKS=$(unzip -l "$ZIPFILE" | awk '{print $4}' | grep '^super\\.raw\\.' | sort)
 
-for chunk in $(unzip -l "$ZIPFILE" | awk '{print $4}' | grep '^super\\.raw\\.' | sort); do
-  CHUNK_NUM=$((CHUNK_IDX + 1))
-  SEEK_OFFSET=$((CHUNK_IDX * BLOCKS_PER_CHUNK))
-  ui_print "    [$CHUNK_NUM/17] Writing $chunk..."
-  
-  unzip -p "$ZIPFILE" "$chunk" | dd of="$SUPER" bs=4M seek=$SEEK_OFFSET conv=notrunc 2>/dev/null
-  if [ $? -ne 0 ]; then
-    ui_print "[-] ERROR: Failed writing $chunk!"
-    exit 1
-  fi
-  
-  # Increment progress indicator
-  PROGRESS=$(awk "BEGIN {printf \"%.2f\", 0.4 + ($CHUNK_NUM / 17.0) * 0.55}" 2>/dev/null || echo "0.7")
-  set_progress "$PROGRESS"
-  
-  CHUNK_IDX=$((CHUNK_IDX + 1))
-done
+if [ -n "$CHUNKS" ]; then
+  ui_print "    Streaming chunked payload in continuous pipe..."
+  unzip -p "$ZIPFILE" $CHUNKS | dd of="$SUPER" bs=4M conv=notrunc 2>/dev/null
+  STATUS=$?
+else
+  ui_print "    Streaming monolithic super.img..."
+  unzip -p "$ZIPFILE" super.img | dd of="$SUPER" bs=4M conv=notrunc 2>/dev/null
+  STATUS=$?
+fi
 
-if [ $CHUNK_IDX -eq 0 ]; then
-  # Fallback for monolithic super image if chunks are not present
-  ui_print "    Writing monolithic super.img..."
-  unzip -p "$ZIPFILE" super.img | dd of="$SUPER" bs=4M conv=notrunc || { ui_print "[-] Failed writing super.img"; exit 1; }
+if [ $STATUS -ne 0 ]; then
+  ui_print "[-] ERROR: Failed writing dynamic super partition (status: $STATUS)!"
+  exit 1
 fi
 
 set_progress 0.95
