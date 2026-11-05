@@ -42,7 +42,7 @@ PARTITION_CONFIGS = [
     {
         "name": "product",
         "mountpoint": "/product",
-        "blocks": 1171273,
+        "blocks": 660000,
         "src_dir": os.path.join(TARGET_DIR, "product", "product"),
         "fs_config": os.path.join(TARGET_DIR, "product", "config", "product_fs_config"),
         "file_contexts": os.path.join(TARGET_DIR, "product", "config", "product_file_contexts")

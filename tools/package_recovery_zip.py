@@ -113,7 +113,7 @@ def create_recovery_zip():
         if not os.path.isfile(p):
             raise FileNotFoundError(f"Required artifact missing: {p}")
 
-    with zipfile.ZipFile(ZIP_OUTPUT_PATH, 'w', compression=zipfile.ZIP_STORED, allowZip64=True) as z:
+    with zipfile.ZipFile(ZIP_OUTPUT_PATH, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as z:
         # 1. Update binary & script
         bin_info = zipfile.ZipInfo("META-INF/com/google/android/update-binary")
         bin_info.external_attr = 0o755 << 16  # Executable permissions
@@ -135,3 +135,4 @@ def create_recovery_zip():
 
 if __name__ == '__main__':
     create_recovery_zip()
+
