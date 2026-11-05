@@ -33,3 +33,5 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.log
+workspace/sweet_tweaks_app/build/
+
