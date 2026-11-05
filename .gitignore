@@ -34,4 +34,5 @@ __pycache__/
 *$py.class
 *.log
 workspace/sweet_tweaks_app/build/
+tools/bin/simg2img_arm64
 
